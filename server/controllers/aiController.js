@@ -7,16 +7,16 @@ import { clerkClient } from "@clerk/express";
 import axios from "axios";
 import {v2 as cloudinary} from 'cloudinary'
 import fs from 'fs'
-import PDFParser from "pdf2json";
+
 
 import { upload } from "../configs/multer.js";
 import FormData from "form-data";
-
 import { createRequire } from "module";
 const require = createRequire(import.meta.url);
-const pdf = require("pdf-parse");
+const PDFParser = require("pdf2json"); // serverless-safe parser
+
 //import pdf from 'pdf-parse/lib/pdf-parse.js'
-//import pdfParse from "pdf-parse/dist/cjs/pdf-parse.js";
+
 
 
 const AI = new OpenAI({
@@ -285,64 +285,97 @@ export const resumeReview = async (req, res) => {
     const plan = req.plan;
     const resume = req.file;
 
+    // 🔐 Premium check
     if (plan !== "premium") {
-      return res.json({
+      return res.status(403).json({
         success: false,
         message: "This feature is only available for premium users",
       });
     }
 
-    if (resume.size > 5 * 1024 * 1024) {
-      return res.json({
+    // 📄 File exist check
+    if (!resume) {
+      return res.status(400).json({
         success: false,
-        message: "Resume file size exceeds 5MB",
+        message: "Resume PDF file is required",
       });
     }
 
-    const filePath = resume.path;
+    // 📏 5MB size check (manual)
+    if (resume.size > 5 * 1024 * 1024) {
+      return res.status(400).json({
+        success: false,
+        message: "Resume file size must be less than 5MB",
+      });
+    }
 
+    // 📥 Read PDF from disk (IMPORTANT)
+    const pdfBuffer = fs.readFileSync(resume.path);
+
+    // 🧠 Parse PDF safely
     const pdfParser = new PDFParser();
 
-    pdfParser.on("pdfParser_dataError", (err) => {
-      return res.json({ success: false, message: err.parserError });
-    });
-
-    pdfParser.on("pdfParser_dataReady", async (pdfData) => {
-      const text = pdfParser.getRawTextContent();
-
-      const prompt = `
-      Review the following resume and provide strengths, weaknesses and suggestions:
-      ${text}
-      `;
-
-      const response = await AI.chat.completions.create({
-        model: "gemini-2.0-flash",
-        messages: [{ role: "user", content: prompt }],
-        temperature: 0.7,
-        max_tokens: 1000,
+    const extractedText = await new Promise((resolve, reject) => {
+      pdfParser.on("pdfParser_dataError", err => {
+        reject(err.parserError);
       });
 
-      const content = response.choices[0].message.content;
+      pdfParser.on("pdfParser_dataReady", data => {
+        const text = data.Pages.map(page =>
+          page.Texts.map(t =>
+            t.R.map(r => decodeURIComponent(r.T)).join("")
+          ).join(" ")
+        ).join("\n\n");
 
-      await sql`
-        INSERT INTO creations (user_id, prompt, content, type)
-        VALUES (${userId}, 'Review the uploaded resume', ${content}, 'resume-review')
-      `;
+        resolve(text);
+      });
 
-      return res.json({ success: true, content });
+      pdfParser.parseBuffer(pdfBuffer);
     });
 
-    pdfParser.loadPDF(filePath);
+    // ✂️ Limit text size (AI safety)
+    const resumeText =
+      extractedText.length > 30000
+        ? extractedText.slice(0, 30000)
+        : extractedText;
+
+    // ✍️ Prompt
+    const prompt = `
+You are an expert resume reviewer.
+
+Please provide:
+1) Strengths
+2) Weaknesses
+3) Improvements
+4) ATS optimization tips
+
+Resume:
+${resumeText}
+`;
+
+    // 🤖 Gemini AI call
+    const response = await AI.chat.completions.create({
+      model: "gemini-2.0-flash",
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.7,
+      max_tokens: 900,
+    });
+
+    const content = response.choices[0].message.content;
+
+    return res.json({
+      success: true,
+      content,
+    });
+
   } catch (error) {
-    console.log(error);
-    return res.json({ success: false, message: error.message });
+    console.error("resumeReview ERROR:", error.message);
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
   }
 };
-
-
-
-
-
 
 
 

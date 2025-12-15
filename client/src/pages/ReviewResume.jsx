@@ -65,7 +65,7 @@ const ReviewResume = () => {
 
       <p className='mt-6 text-sm font-medium'>Upload Resume</p>
 
-      <input onChange={(e)=>setInput(e.target.files[0])} accept='application/pdf*'  type='file' className='w-full p-2 px-3 mt-2 outline-none text-sm rounded-md border border-gray-300 text-gray-600' placeholder='Describe what you want to see in the image...' required/>
+      <input onChange={(e)=>setInput(e.target.files[0])} accept='application/pdf'  type='file' className='w-full p-2 px-3 mt-2 outline-none text-sm rounded-md border border-gray-300 text-gray-600' placeholder='Describe what you want to see in the image...' required/>
       
       
 
